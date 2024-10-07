@@ -2,43 +2,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class NT_Xent_Sup(nn.Module):
     def __init__(self, temperature=0.1):
         super().__init__()
         self.t = temperature
     
     def forward(self, z_i, z_j, label):
-        N = 2 * z_i.shape[0]
+        batch_size = z_i.shape[0]
+        N = 2 * batch_size  # 배치 크기의 두 배로 설정
+        epsilon = 1e-8  # 작은 값 추가
 
+        # z_i와 z_j 결합
         z = torch.cat([z_i, z_j], dim=0)
 
-        # label 확장 (두 개의 z_i, z_j를 합쳤으므로 label도 두 배로 확장)
+        # label도 두 배로 확장 (양성-음성 쌍에 대응)
         label = torch.cat([label, label], dim=0)
 
-        # calc similarity
+        # 유사성 계산
         z = F.normalize(z, p=2, dim=-1)
-        sim = torch.mm(z, z.T) / self.t
-        label = label.cpu()
+        sim = torch.mm(z, z.T) / self.t  # 유사성 행렬 계산
 
-        # mask_pos 크기 맞추기
-        mask_pos = torch.mm(label.to_sparse(), label.T)
-        mask_pos = mask_pos.fill_diagonal_(0).to(sim.device)
-        mask_neg = torch.ones((N, N)).fill_diagonal_(0).to(sim.device)
+        # 양성 및 음성 마스크 생성
+        mask_pos = torch.eye(N, dtype=torch.float32, device=sim.device)  # N x N 양성 마스크
+        mask_pos.fill_diagonal_(0)  # 대각선은 0으로 설정
+        
+        mask_neg = torch.ones_like(mask_pos, device=sim.device)  # 음성 마스크 생성
+        mask_neg.fill_diagonal_(0)  # 음성 마스크에서 대각선 0 설정
 
-        # calc nce
-        pos_cnt = torch.sum(mask_pos, dim=-1)
-        denominator = torch.sum(torch.exp(sim) * mask_neg, dim=-1)
+        # 손실 계산
+        numerator = torch.sum(torch.exp(sim) * mask_pos, dim=-1)
+        denominator = torch.sum(torch.exp(sim) * mask_neg, dim=-1) + epsilon  # epsilon 추가
 
-        # remove the sim column which not contain same class
-        idx = torch.where(pos_cnt > 0)
-        numerator = torch.sum(sim * mask_pos, dim=-1)
-        numerator = numerator[idx] / pos_cnt[idx]
-        denominator = denominator[idx]
-
-        loss = torch.mean(torch.log(denominator) - numerator)
+        # 손실 함수 적용
+        loss = -torch.log((numerator + epsilon) / denominator)  # 분자에도 epsilon 추가
+        loss = torch.mean(loss)
 
         return loss
+
 
 
 #        # remove the sim column which not contain same class
